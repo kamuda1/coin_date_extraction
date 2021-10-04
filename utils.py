@@ -5,17 +5,49 @@ from skimage.filters import threshold_otsu
 from skimage.measure._regionprops import RegionProperties
 from skimage.segmentation import clear_border
 from skimage.measure import label, regionprops
-from skimage.morphology import closing, square, convex_hull_image, watershed
+from skimage.morphology import closing, square, convex_hull_image, watershed, binary_dilation
 from skimage.feature import peak_local_max
-from skimage import morphology
 from skimage.filters import sobel
 from skimage.segmentation import watershed
 from skimage import exposure
+
 from scipy.stats import mode
 from collections import Counter
 from skimage import measure
-import matplotlib.pyplot as plt
-from scipy import ndimage
+import scipy.ndimage as ndimage
+
+
+def refine_regions(dilated_mask: np.ndarray, img: np.ndarray,  percentile: float = 80):
+    regions_labeled = label(dilated_mask)
+    regions_labeled_props = regionprops(regions_labeled, img)
+
+    all_major_axis_lengths = [region.major_axis_length for region in regions_labeled_props]
+    major_axis_length_thresh = np.percentile(all_major_axis_lengths, percentile)
+
+    best_good_region_candidates = []
+    for region in regions_labeled_props:
+        if region.major_axis_length > major_axis_length_thresh:
+            best_good_region_candidates.append(region)
+    return best_good_region_candidates
+
+
+def regionprops_to_region_mask(regionprops, img_shape: Tuple):
+    r_mask = np.zeros(img_shape, dtype='bool')
+    for regionprops in regionprops:
+        contour = regionprops.coords
+        # Create an empty image to store the masked array
+        # Create a contour image by using the contour coordinates rounded to their nearest integer value
+        r_mask[np.round(contour[:, 0]).astype('int'), np.round(contour[:, 1]).astype('int')] = 1
+        # Fill in the hole created by the contour boundary
+        r_mask += ndimage.binary_fill_holes(r_mask)
+
+    return r_mask
+
+
+def dilate_and_join_regions(all_regionprops: List[RegionProperties], img_shape: Tuple, mask_size: int = 5):
+    mask = regionprops_to_region_mask(all_regionprops, img_shape)
+    dilated_mask = binary_dilation(mask, square(mask_size))
+    return dilated_mask
 
 
 def refine_contours(contours: List[np.ndarray], img_shape: Tuple) -> List[RegionProperties]:
@@ -31,7 +63,6 @@ def refine_contours(contours: List[np.ndarray], img_shape: Tuple) -> List[Region
             region_props_tmp = regionprops(image_convex_hull.astype('uint8'))[0]
             if 50 < region_props_tmp.area < 200:
                 all_regionprops.append(region_props_tmp)
-                plt.plot(contour[:, 1], contour[:, 0], linewidth=2)
     return all_regionprops
 
 
